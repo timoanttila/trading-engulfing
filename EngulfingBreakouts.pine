@@ -1,0 +1,150 @@
+// © Timo Anttila, Tuspe Design Oy
+
+//@version=6
+indicator("Engulfing Breakouts", shorttitle="BigE", overlay=true, max_labels_count=200)
+
+group1 = "Moving Averages"
+ma1_length = input.int(20, "SMA Short Length", maxval=50, minval=5, group=group1)
+ma1 = ta.sma(close, ma1_length)
+plot(ma1, color=color.yellow, linewidth=2, title="SMA Short")
+
+ma2_length = input.int(200, "SMA Long Length", maxval=300, minval=20, group=group1)
+ma2 = ta.sma(close, ma2_length)
+plot(ma2, color=color.white, linewidth=2, title="SMA Long")
+
+group2 = "Clearing Bars"
+entry_bear_bars = input.int(10, "Numbers of bars for Longs", group=group2)
+entry_bull_bars = input.int(20, "Numbers of bars for Shorts", group=group2)
+
+group3 = "Average True Range"
+atr_length = input.int(20, "ATR length", group=group3)
+atr_exit_m = input.float(2, "ATR exit multiplier", group=group3)
+
+group5 = "Entry Settings"
+min_body_perc = input.float(50, "Min entry candle body %", minval=20, maxval=95, group=group5)
+entries_max = input.int(2, "Max entries", minval=1, maxval=10, group=group5)
+
+// ----------
+//  GLOBAL VARIABLES
+// ----------
+
+bool is_bear = close < open
+bool is_bull = close > open
+float atr_val = ta.atr(atr_length)
+float entry_bear_lowest = ta.lowest(low, entry_bear_bars)[1]
+float entry_bull_highest = ta.highest(high, entry_bull_bars)[1]
+int entry = na
+int exit = na
+var bool exit_taken = false
+var float exit_atr = 0
+var float exit_bar = na
+var float pullback = na
+var int entries = 0
+var int trend = 0
+
+// ----------
+//  EXIT
+// ----------
+
+if entries > 0 and not exit_taken and not na(exit_bar)
+    if (trend == 1 and (close < exit_bar or close < exit_atr or close < ma1)) or (trend == 2 and (close > exit_bar or close > exit_atr or close > ma1))
+        exit := trend
+        exit_taken := true
+
+    else
+        float atr_sl_size = atr_exit_m * atr_val
+
+        if trend == 1
+            float candidate = low - atr_sl_size
+            if candidate > exit_atr
+                exit_atr := candidate
+
+        else if trend == 2
+            float candidate = high + atr_sl_size
+            if candidate < exit_atr
+                exit_atr := candidate
+
+// ----------
+//  RESET
+// ----------
+
+bool cross_bear = ta.crossunder(close, ma1)
+bool cross_bull = ta.crossover(close, ma1)
+//bool trend_confirm = math.abs(close - ma1) > atr_val * 0.3
+
+if cross_bear or cross_bull
+    entries := 0
+    exit_atr := na
+    exit_bar := na
+    exit_taken := false
+    pullback := na
+    trend := cross_bull ? 1 : 2
+
+// ----------
+//  ENTRY
+// ----------
+
+if entries_max > entries
+    float body_size = math.abs(close - open)
+    float candle_size = math.abs(high - low)
+    float prev_candle_size = math.abs(high[1] - low[1])
+
+    bool elephant_body = body_size / candle_size >= min_body_perc / 100
+    bool elephant_range = body_size > prev_candle_size and body_size > atr_val * 0.8 and candle_size < atr_val * 3.5
+    bool body_ok = elephant_body and elephant_range
+
+    float breakout_buffer = atr_val * 0.15
+    bool bear_break = close < entry_bear_lowest - breakout_buffer
+    bool bull_break = close > entry_bull_highest + breakout_buffer
+
+    bool bear_trend = trend == 2 and is_bear and bear_break and (na(pullback) or close < pullback)
+    bool bull_trend = trend == 1 and is_bull and bull_break and (na(pullback) or close > pullback)
+
+    bool candle_ok = body_ok and (bear_trend or bull_trend)
+    bool is_engulfing = candle_ok and ((bear_trend and is_bull[1]) or (bull_trend and is_bear[1])) and body_size > prev_candle_size * 1.2
+
+    if (is_engulfing and na(pullback)) or candle_ok
+        entries := entries + 1
+
+        if bear_trend
+            entry := 2
+            exit_bar := high
+
+        else if bull_trend
+            entry := 1
+            exit_bar := low
+
+        if is_engulfing
+            pullback := 0
+
+        if not na(exit)
+            exit := na
+
+    else if na(pullback)
+        if trend == 1 and is_bear
+            pullback := high
+
+        else if trend == 2 and is_bull
+            pullback := low
+
+// ----------
+//  VISUAL
+// ----------
+
+plot_size = size.tiny
+plot_bull = location.belowbar
+plot_bear = location.abovebar
+
+plotshape(entry == 1, title="Long Entry", style=shape.triangleup, location=plot_bull, color=color.green, size=plot_size)
+plotshape(entry == 2, title="Short Entry", style=shape.triangledown, location=plot_bear, color=color.red, size=plot_size)
+
+plot_style = shape.xcross
+plot_color = color.new(color.gray, 20)
+plotshape(exit == 1, title="Long ATR Exit", style=plot_style, location=plot_bull, color=plot_color, size=plot_size)
+plotshape(exit == 2, title="Short ATR Exit", style=plot_style, location=plot_bear, color=plot_color, size=plot_size)
+
+// ----------
+//  ALERTS
+// ----------
+
+alertcondition(entry > 0, title="New Trend", message="New signal detected. Happy trading!")
